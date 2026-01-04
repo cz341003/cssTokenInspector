@@ -7,12 +7,20 @@ interface StyleItem {
   variable?: string;
 }
 
+interface Rect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
 interface ElementData {
   tagName: string;
   className: string;
   styles: StyleItem[];
   mouseX: number;
   mouseY: number;
+  rect: Rect;
 }
 
 const isActive = ref(false);
@@ -24,6 +32,7 @@ const targetElement = ref<HTMLElement | null>(null);
 const panelRef = ref<HTMLElement | null>(null);
 const currentElementData = ref<{ tagName: string, className: string } | null>(null);
 const currentTabId = ref<number | null>(null);
+const highlightRect = ref<Rect | null>(null);
 
 const isTopFrame = window === window.top;
 
@@ -39,6 +48,17 @@ const panelStyle = computed(() => {
     boxShadow: isFrozen.value 
       ? '0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 0 0 1px rgba(251, 191, 36, 0.3)' 
       : '0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05)',
+  };
+});
+
+const maskStyle = computed(() => {
+  if (!highlightRect.value || !isActive.value) return { display: 'none' };
+  return {
+    left: `${highlightRect.value.x}px`,
+    top: `${highlightRect.value.y}px`,
+    width: `${highlightRect.value.width}px`,
+    height: `${highlightRect.value.height}px`,
+    display: 'block',
   };
 });
 
@@ -140,25 +160,27 @@ const handleMouseMove = (e: MouseEvent) => {
     throttleTimer = null;
     if (!elAtPoint || elAtPoint === targetElement.value) return;
 
-    if (targetElement.value) {
-      targetElement.value.style.outline = '';
-    }
-    
     targetElement.value = elAtPoint;
-    targetElement.value.style.outline = '2px solid #3b82f6';
-    targetElement.value.style.outlineOffset = '-2px';
     
-    const elementData = {
+    const rect = elAtPoint.getBoundingClientRect();
+    const elementData: ElementData = {
       tagName: elAtPoint.tagName.toLowerCase(),
       className: String(elAtPoint.className),
       styles: getStyles(elAtPoint),
       mouseX: e.clientX,
-      mouseY: e.clientY
+      mouseY: e.clientY,
+      rect: {
+        x: rect.left,
+        y: rect.top,
+        width: rect.width,
+        height: rect.height
+      }
     };
 
     if (isTopFrame) {
       currentElementData.value = { tagName: elementData.tagName, className: elementData.className };
       styles.value = elementData.styles;
+      highlightRect.value = elementData.rect;
     } else {
       browser.runtime.sendMessage({
         type: 'IFRAME_STYLE_UPDATE',
@@ -185,9 +207,6 @@ const handleKeyDown = async (e: KeyboardEvent) => {
   const key = e.key.toLowerCase();
   if (key === 'f') {
     isFrozen.value = !isFrozen.value;
-    if (targetElement.value) {
-      targetElement.value.style.outline = isFrozen.value ? '2px solid #fbbf24' : '2px solid #3b82f6';
-    }
   } else if (e.key === 'Escape') {
     if (currentTabId.value) {
       await browser.storage.local.set({ [`tab_active_${currentTabId.value}`]: false });
@@ -202,10 +221,8 @@ const syncState = (changes: any) => {
     isActive.value = !!changes[key].newValue;
     if (!isActive.value) {
       isFrozen.value = false;
-      if (targetElement.value) {
-        targetElement.value.style.outline = '';
-        targetElement.value = null;
-      }
+      targetElement.value = null;
+      highlightRect.value = null;
     }
   }
 };
@@ -246,6 +263,12 @@ onMounted(async () => {
         updatePanelPosition(iframeRect.left + data.mouseX, iframeRect.top + data.mouseY);
         currentElementData.value = { tagName: data.tagName, className: data.className };
         styles.value = data.styles;
+        highlightRect.value = {
+          x: iframeRect.left + data.rect.x,
+          y: iframeRect.top + data.rect.y,
+          width: data.rect.width,
+          height: data.rect.height
+        };
       }
     }
   });
@@ -259,42 +282,57 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <Transition name="fade">
-    <div
-      v-if="isActive && isTopFrame"
-      ref="panelRef"
-      class="style-inspector-panel"
-      :style="panelStyle"
-    >
-      <div class="panel-header">
-        <div class="header-top">
-          <span class="status-dot" :class="{ 'frozen': isFrozen }"></span>
-          <span class="title">{{ isFrozen ? 'FROZEN' : 'INSPECTING' }}</span>
+  <div v-if="isActive && isTopFrame" class="inspector-container">
+    <!-- Highlight Mask -->
+    <div class="element-highlight-mask" :style="maskStyle"></div>
+
+    <!-- Style Panel -->
+    <Transition name="fade">
+      <div
+        v-if="currentElementData"
+        ref="panelRef"
+        class="style-inspector-panel"
+        :style="panelStyle"
+      >
+        <div class="panel-header">
+          <div class="header-top">
+            <span class="status-dot" :class="{ 'frozen': isFrozen }"></span>
+            <span class="title">{{ isFrozen ? 'FROZEN' : 'INSPECTING' }}</span>
+          </div>
+          <div class="element-info">
+            <span class="tag-name">{{ currentElementData.tagName }}</span>
+            <span v-if="currentElementData.className" class="class-name" :title="currentElementData.className">
+              .{{ currentElementData.className.split(' ').filter(Boolean).join('.') }}
+            </span>
+          </div>
         </div>
-        <div v-if="currentElementData" class="element-info">
-          <span class="tag-name">{{ currentElementData.tagName }}</span>
-          <span v-if="currentElementData.className" class="class-name" :title="currentElementData.className">
-            .{{ currentElementData.className.split(' ').filter(Boolean).join('.') }}
-          </span>
-        </div>
-      </div>
-      
-      <div class="panel-content">
-        <div v-for="item in styles" :key="item.property" class="style-row">
-          <div class="prop-name">{{ item.property }}</div>
-          <div class="prop-value-group">
-            <div v-if="item.variable" class="var-name" :title="item.variable">
-              {{ item.variable }}
+        
+        <div class="panel-content">
+          <div v-for="(item, index) in styles" :key="item.property" class="style-row" :class="{ 'even': index % 2 === 0 }">
+            <div class="prop-name">{{ item.property }}</div>
+            <div class="prop-value-group">
+              <div v-if="item.variable" class="var-name" :title="item.variable">
+                {{ item.variable }}
+              </div>
+              <div class="prop-value" :class="{ 'is-var': item.variable }">{{ item.value }}</div>
             </div>
-            <div class="prop-value" :class="{ 'is-var': item.variable }">{{ item.value }}</div>
           </div>
         </div>
       </div>
-    </div>
-  </Transition>
+    </Transition>
+  </div>
 </template>
 
 <style scoped>
+.element-highlight-mask {
+  position: fixed;
+  z-index: 2147483646;
+  background-color: rgba(59, 130, 246, 0.2);
+  border: 1px solid rgba(59, 130, 246, 0.5);
+  pointer-events: none;
+  transition: all 0.1s ease-out;
+}
+
 .style-inspector-panel {
   position: fixed;
   z-index: 2147483647;
@@ -302,7 +340,6 @@ onUnmounted(() => {
   backdrop-filter: blur(12px);
   border: 1px solid #e2e8f0;
   border-radius: 12px;
-  padding: 16px;
   width: 280px;
   font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   font-size: 12px;
@@ -310,11 +347,12 @@ onUnmounted(() => {
   user-select: none;
   box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
   transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  overflow: hidden;
 }
 
 .panel-header {
-  margin-bottom: 12px;
-  padding-bottom: 10px;
+  padding: 12px 16px;
+  background-color: #f8fafc;
   border-bottom: 1px solid #f1f5f9;
 }
 
@@ -348,30 +386,32 @@ onUnmounted(() => {
 
 .element-info {
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
-  gap: 6px;
-  overflow: hidden;
+  gap: 4px 8px;
 }
 
 .tag-name {
-  color: #3b82f6;
-  font-weight: 700;
-  font-size: 15px;
+  color: #2563eb;
+  font-weight: 800;
+  font-size: 16px;
 }
 
 .class-name {
-  color: #64748b;
-  font-size: 11px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  color: #475569;
+  font-size: 10px;
+  word-break: break-all;
+  line-height: 1.5;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  background: #f1f5f9;
+  padding: 1px 4px;
+  border-radius: 4px;
 }
 
 .panel-content {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  padding: 0;
 }
 
 .style-row {
@@ -379,14 +419,32 @@ onUnmounted(() => {
   justify-content: space-between;
   align-items: flex-start;
   gap: 12px;
+  padding: 10px 16px;
+  transition: background-color 0.1s ease;
+  border-bottom: 1px solid #f1f5f9;
+}
+
+.style-row:last-child {
+  border-bottom: none;
+}
+
+.style-row:hover {
+  background-color: #f8fafc;
+}
+
+.style-row.even {
+  background-color: #fafafa;
 }
 
 .prop-name {
-  color: #64748b;
-  font-size: 11px;
+  color: #94a3b8;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
   flex-shrink: 0;
-  width: 100px;
-  font-weight: 500;
+  width: 90px;
+  font-weight: 600;
+  padding-top: 2px;
 }
 
 .prop-value-group {
