@@ -5,6 +5,10 @@ interface StyleItem {
   property: string;
   value: string;
   variable?: string;
+  // Inheritance tracing fields
+  isInheritable?: boolean;
+  inheritedVar?: string;
+  isChecking?: boolean;
 }
 
 interface Rect {
@@ -53,6 +57,18 @@ const propNameMap: Record<string, string> = {
   'border-bottom-left-radius': '左下圆角',
 };
 
+const inheritableProps = new Set([
+  'color', 
+  'font-size', 
+  'font-weight', 
+  'line-height', 
+  'text-align', 
+  'visibility', 
+  'white-space', 
+  'word-spacing',
+  'cursor'
+]);
+
 const isActive = ref(false);
 const isFrozen = ref(false);
 const mousePos = ref({ x: 0, y: 0 });
@@ -91,6 +107,76 @@ const maskStyle = computed(() => {
     display: 'block',
   };
 });
+
+// --- Inheritance Tracing Logic ---
+
+const getStyleFromRules = (el: HTMLElement, prop: string): string | undefined => {
+  try {
+    for (const sheet of Array.from(document.styleSheets)) {
+      try {
+        if (!sheet.cssRules) continue;
+        for (const rule of Array.from(sheet.cssRules)) {
+          if (rule instanceof CSSStyleRule) {
+            // Simple matching: checks if the element matches the selector.
+            // Doesn't strictly follow cascade/specificity for this "search", 
+            // but effectively finds if the rule *could* apply and has a var.
+            if (el.matches(rule.selectorText)) {
+              const val = rule.style.getPropertyValue(prop);
+              if (val && val.includes('var(')) {
+                return val;
+              }
+            }
+          }
+        }
+      } catch (e) {
+        // Ignore CORS errors or access denied
+      }
+    }
+  } catch (e) {}
+  return undefined;
+};
+
+const findInheritedVariable = (startEl: HTMLElement, prop: string): string | undefined => {
+  let el = startEl.parentElement;
+  let depth = 0;
+  const MAX_DEPTH = 20;
+
+  while (el && depth < MAX_DEPTH) {
+    // 1. Check Inline Style
+    const inlineVal = el.style.getPropertyValue(prop);
+    if (inlineVal && inlineVal.includes('var(')) {
+      const match = inlineVal.match(/var\((--[^)]+)\)/);
+      if (match) return match[1];
+    }
+
+    // 2. Check CSS Rules
+    const cssVal = getStyleFromRules(el, prop);
+    if (cssVal) {
+       const match = cssVal.match(/var\((--[^)]+)\)/);
+       if (match) return match[1];
+    }
+    
+    // Move up
+    el = el.parentElement;
+    depth++;
+  }
+  return undefined;
+};
+
+const checkInheritance = async (item: StyleItem) => {
+  if (!targetElement.value) return;
+  
+  item.isChecking = true;
+  
+  // Use setTimeout to allow UI update and prevent blocking
+  setTimeout(() => {
+    const inherited = findInheritedVariable(targetElement.value!, item.property);
+    item.inheritedVar = inherited || '未找到变量源';
+    item.isChecking = false;
+  }, 10);
+};
+
+// --- End Inheritance Logic ---
 
 const getVariableForProperty = (el: HTMLElement, prop: string): string | undefined => {
   const inlineValue = el.style.getPropertyValue(prop);
@@ -148,25 +234,29 @@ const getStyles = (el: HTMLElement): StyleItem[] => {
   const newStyles: StyleItem[] = [];
   mainProps.forEach(prop => {
     const value = computedStyle.getPropertyValue(prop);
+    const isInheritable = inheritableProps.has(prop);
+
     if (subPropsMap[prop]) {
       const subValues = subPropsMap[prop].map(p => computedStyle.getPropertyValue(p));
       const allSame = subValues.every(v => v === subValues[0]);
       if (allSame && value && value !== '0px' && !value.includes('0px 0px')) {
         const variable = getVariableForProperty(el, prop);
-        newStyles.push({ property: prop, value: value.toLowerCase(), variable });
+        newStyles.push({ property: prop, value: value.toLowerCase(), variable, isInheritable });
       } else {
         subPropsMap[prop].forEach(p => {
           const v = computedStyle.getPropertyValue(p);
           if (v && v !== '0px' && v !== '0' && !v.includes('none')) {
             const variable = getVariableForProperty(el, p);
-            newStyles.push({ property: p, value: v.toLowerCase(), variable });
+            // sub-properties like margin-top are not typically inherited in the same way 
+            // the shorthand might be, but let's assume specific ones aren't for now unless explicit.
+            newStyles.push({ property: p, value: v.toLowerCase(), variable, isInheritable: inheritableProps.has(p) });
           }
         });
       }
     } else {
       if (value && value !== 'none' && value !== 'rgba(0, 0, 0, 0)' && value !== 'transparent') {
         const variable = getVariableForProperty(el, prop);
-        newStyles.push({ property: prop, value: value.toLowerCase(), variable });
+        newStyles.push({ property: prop, value: value.toLowerCase(), variable, isInheritable });
       }
     }
   });
@@ -347,7 +437,23 @@ onUnmounted(() => {
               <div v-if="item.variable" class="var-name" :title="item.variable">
                 {{ item.variable }}
               </div>
-              <div class="prop-value" :class="{ 'is-var': item.variable }">{{ item.value }}</div>
+              <div v-else-if="item.inheritedVar" class="var-name inherited-var" :title="item.inheritedVar">
+                {{ item.inheritedVar }}
+              </div>
+              
+              <div class="prop-value-row">
+                 <div class="prop-value" :class="{ 'is-var': item.variable || item.inheritedVar }">{{ item.value }}</div>
+                 <!-- Trace Button -->
+                 <button 
+                   v-if="item.isInheritable && !item.variable && !item.inheritedVar" 
+                   class="trace-btn"
+                   @click.stop="checkInheritance(item)"
+                   title="查找继承变量"
+                 >
+                   <span v-if="item.isChecking" class="loading-spinner"></span>
+                   <span v-else>🔍</span>
+                 </button>
+              </div>
             </div>
           </div>
         </div>
@@ -359,7 +465,7 @@ onUnmounted(() => {
 <style scoped lang="less">
 .element-highlight-mask {
   position: fixed;
-  z-index: 2147483646;
+  z-index: 99998;
   background-color: rgba(59, 130, 246, 0.2);
   border: 1px solid rgba(59, 130, 246, 0.5);
   pointer-events: none;
@@ -373,7 +479,7 @@ onUnmounted(() => {
   backdrop-filter: blur(12px);
   border: 1px solid #e2e8f0;
   border-radius: 12px;
-  width: 320px;
+  width: 330px;
   font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   font-size: 12px;
   color: #1e293b;
@@ -409,7 +515,7 @@ onUnmounted(() => {
       .title {
         font-size: 10px;
         font-weight: 800;
-        color: #94a3b8;
+        color: #1e293b;
         letter-spacing: 0.1em;
       }
     }
@@ -500,6 +606,17 @@ onUnmounted(() => {
           text-overflow: ellipsis;
           white-space: nowrap;
           font-family: ui-monospace, monospace;
+          
+          &.inherited-var {
+             color: #059669; /* Green for inherited */
+          }
+        }
+        
+        .prop-value-row {
+          display: flex;
+          justify-content: flex-end;
+          align-items: center;
+          gap: 6px;
         }
 
         .prop-value {
@@ -513,9 +630,42 @@ onUnmounted(() => {
             font-weight: 600;
           }
         }
+        
+        .trace-btn {
+          background: none;
+          border: none;
+          cursor: pointer;
+          padding: 2px;
+          font-size: 10px;
+          color: #64748b;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          opacity: 0.6;
+          transition: opacity 0.2s;
+          
+          &:hover {
+             opacity: 1;
+             background-color: #e2e8f0;
+             border-radius: 4px;
+          }
+        }
+        
+        .loading-spinner {
+          width: 8px;
+          height: 8px;
+          border: 1px solid #cbd5e1;
+          border-top-color: #3b82f6;
+          border-radius: 50%;
+          animation: spin 0.6s linear infinite;
+        }
       }
     }
   }
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
 }
 
 .fade-enter-active,
