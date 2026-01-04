@@ -23,6 +23,36 @@ interface ElementData {
   rect: Rect;
 }
 
+const propNameMap: Record<string, string> = {
+  'font-size': '字体大小',
+  'font-weight': '字体粗细',
+  'color': '字体颜色',
+  'line-height': '行高',
+  'margin': '外边距',
+  'padding': '内边距',
+  'border': '边框',
+  'border-radius': '圆角',
+  'background': '背景',
+  'background-color': '背景颜色',
+  'box-shadow': '阴影',
+  'margin-top': '上外边距',
+  'margin-right': '右外边距',
+  'margin-bottom': '下外边距',
+  'margin-left': '左外边距',
+  'padding-top': '上内边距',
+  'padding-right': '右内边距',
+  'padding-bottom': '下内边距',
+  'padding-left': '左内边距',
+  'border-top': '上边框',
+  'border-right': '右边框',
+  'border-bottom': '下边框',
+  'border-left': '左边框',
+  'border-top-left-radius': '左上圆角',
+  'border-top-right-radius': '右上圆角',
+  'border-bottom-right-radius': '右下圆角',
+  'border-bottom-left-radius': '左下圆角',
+};
+
 const isActive = ref(false);
 const isFrozen = ref(false);
 const mousePos = ref({ x: 0, y: 0 });
@@ -123,20 +153,20 @@ const getStyles = (el: HTMLElement): StyleItem[] => {
       const allSame = subValues.every(v => v === subValues[0]);
       if (allSame && value && value !== '0px' && !value.includes('0px 0px')) {
         const variable = getVariableForProperty(el, prop);
-        newStyles.push({ property: prop, value, variable });
+        newStyles.push({ property: prop, value: value.toLowerCase(), variable });
       } else {
         subPropsMap[prop].forEach(p => {
           const v = computedStyle.getPropertyValue(p);
           if (v && v !== '0px' && v !== '0' && !v.includes('none')) {
             const variable = getVariableForProperty(el, p);
-            newStyles.push({ property: p, value: v, variable });
+            newStyles.push({ property: p, value: v.toLowerCase(), variable });
           }
         });
       }
     } else {
       if (value && value !== 'none' && value !== 'rgba(0, 0, 0, 0)' && value !== 'transparent') {
         const variable = getVariableForProperty(el, prop);
-        newStyles.push({ property: prop, value, variable });
+        newStyles.push({ property: prop, value: value.toLowerCase(), variable });
       }
     }
   });
@@ -297,7 +327,7 @@ onUnmounted(() => {
         <div class="panel-header">
           <div class="header-top">
             <span class="status-dot" :class="{ 'frozen': isFrozen }"></span>
-            <span class="title">{{ isFrozen ? 'FROZEN' : 'INSPECTING' }}</span>
+            <span class="title">{{ isFrozen ? '冻结中' : 'CSS Token检测' }}</span>
           </div>
           <div class="element-info">
             <span class="tag-name">{{ currentElementData.tagName }}</span>
@@ -309,7 +339,10 @@ onUnmounted(() => {
         
         <div class="panel-content">
           <div v-for="(item, index) in styles" :key="item.property" class="style-row" :class="{ 'even': index % 2 === 0 }">
-            <div class="prop-name">{{ item.property }}</div>
+            <div class="prop-name">
+              <span>{{ item.property }}</span>
+              <span v-if="propNameMap[item.property]" class="cn-label">{{ propNameMap[item.property] }}</span>
+            </div>
             <div class="prop-value-group">
               <div v-if="item.variable" class="var-name" :title="item.variable">
                 {{ item.variable }}
@@ -380,7 +413,6 @@ onUnmounted(() => {
   font-size: 10px;
   font-weight: 800;
   color: #94a3b8;
-  text-transform: uppercase;
   letter-spacing: 0.1em;
 }
 
@@ -421,7 +453,7 @@ onUnmounted(() => {
   gap: 12px;
   padding: 10px 16px;
   transition: background-color 0.1s ease;
-  border-bottom: 1px solid #f1f5f9;
+  border-bottom: 1px solid #cbd5e1;
 }
 
 .style-row:last-child {
@@ -433,18 +465,28 @@ onUnmounted(() => {
 }
 
 .style-row.even {
-  background-color: #fafafa;
+  background-color: #f1f5f9;
 }
 
 .prop-name {
-  color: #94a3b8;
+  color: #334155;
   font-size: 10px;
-  text-transform: uppercase;
   letter-spacing: 0.05em;
   flex-shrink: 0;
-  width: 90px;
-  font-weight: 600;
+  width: 120px;
+  font-weight: 800;
   padding-top: 2px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.cn-label {
+  font-size: 9px;
+  color: #64748b;
+  font-weight: normal;
+  text-transform: none;
+  letter-spacing: 0;
 }
 
 .prop-value-group {
