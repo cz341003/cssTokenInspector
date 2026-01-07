@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, computed } from 'vue';
+import { ref, onMounted, onUnmounted, computed, nextTick } from 'vue';
 
 interface StyleItem {
   property: string;
@@ -301,6 +301,9 @@ const handleMouseMove = (e: MouseEvent) => {
       currentElementData.value = { tagName: elementData.tagName, className: elementData.className };
       styles.value = elementData.styles;
       highlightRect.value = elementData.rect;
+      nextTick(() => {
+        updatePanelPosition(e.clientX, e.clientY);
+      });
     } else {
       browser.runtime.sendMessage({
         type: 'IFRAME_STYLE_UPDATE',
@@ -313,11 +316,21 @@ const handleMouseMove = (e: MouseEvent) => {
 const updatePanelPosition = (x: number, y: number) => {
   let nextX = x + 15;
   let nextY = y + 15;
-  if (panelRef.value) {
-    const rect = panelRef.value.getBoundingClientRect();
-    if (nextX + rect.width > window.innerWidth) nextX = x - rect.width - 15;
-    if (nextY + rect.height > window.innerHeight) nextY = y - rect.height - 15;
+  
+  // Use offsetWidth/Height for more reliable measurement during updates
+  const width = panelRef.value?.offsetWidth || 330;
+  const height = panelRef.value?.offsetHeight || 400;
+
+  if (nextX + width > window.innerWidth) {
+    nextX = x - width - 15;
   }
+  if (nextX < 10) nextX = 10;
+
+  if (nextY + height > window.innerHeight) {
+    nextY = y - height - 15;
+  }
+  if (nextY < 10) nextY = 10;
+
   panelPos.value = { x: nextX, y: nextY };
 };
 
@@ -380,7 +393,6 @@ onMounted(async () => {
 
       if (targetIframe) {
         const iframeRect = targetIframe.getBoundingClientRect();
-        updatePanelPosition(iframeRect.left + data.mouseX, iframeRect.top + data.mouseY);
         currentElementData.value = { tagName: data.tagName, className: data.className };
         styles.value = data.styles;
         highlightRect.value = {
@@ -389,6 +401,9 @@ onMounted(async () => {
           width: data.rect.width,
           height: data.rect.height
         };
+        nextTick(() => {
+          updatePanelPosition(iframeRect.left + data.mouseX, iframeRect.top + data.mouseY);
+        });
       }
     }
   });
@@ -549,6 +564,8 @@ onUnmounted(() => {
     display: flex;
     flex-direction: column;
     padding: 0;
+    max-height: 70vh;
+    overflow-y: auto;
 
     .style-row {
       display: flex;
